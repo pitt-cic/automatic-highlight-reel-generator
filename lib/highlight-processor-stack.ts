@@ -19,7 +19,7 @@ export class HighlightProcessorStack extends cdk.Stack {
       natGateways: 1,
     });
 
-    // Create Security Group
+    // Create Security Group for video processing tasks
     const securityGroup = new ec2.SecurityGroup(this, 'VideoProcessorSG', {
       vpc,
       description: 'Security group for video processor ECS tasks',
@@ -57,14 +57,14 @@ export class HighlightProcessorStack extends cdk.Stack {
       logGroupName: '/ecs/video-processor',
       retention: logs.RetentionDays.ONE_WEEK,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
-    });
+    }); // Logs for ECS tasks are retained for one week and then deleted
 
     // Create Task Role
     const taskRole = new iam.Role(this, 'VideoProcessorTaskRole', {
       assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
       managedPolicies: [
         iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonS3ReadOnlyAccess'),
-      ],
+      ], // Allows the task to read from S3
     });
 
     // Create Execution Role
@@ -72,7 +72,7 @@ export class HighlightProcessorStack extends cdk.Stack {
       assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
       managedPolicies: [
         iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonECSTaskExecutionRolePolicy'),
-      ],
+      ], // Provides necessary permissions for ECS task execution
     });
 
     // Create Task Definition
@@ -92,7 +92,7 @@ export class HighlightProcessorStack extends cdk.Stack {
         streamPrefix: 'video-processor',
         logGroup,
       }),
-      essential: true,
+      essential: true, // Marks this container as essential for the task
     });
 
     // Create S3 Bucket
@@ -100,7 +100,7 @@ export class HighlightProcessorStack extends cdk.Stack {
       bucketName: `video-uploads-${this.account}-${this.region}`,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
-    });
+    }); // S3 bucket to store video uploads
 
     // Grant bucket access to task role
     videoBucket.grantRead(taskRole);
@@ -134,7 +134,7 @@ export class HighlightProcessorStack extends cdk.Stack {
     // Add S3 notification to trigger Lambda
     videoBucket.addEventNotification(
       s3.EventType.OBJECT_CREATED,
-      new s3n.LambdaDestination(triggerLambda),
+      new s3n.LambdaDestination(triggerLambda), // Lambda function to be triggered
       { prefix: 'videos/' }
     );
 
