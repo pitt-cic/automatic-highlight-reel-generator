@@ -35,3 +35,6 @@ yarn-error.log*
 /response.json
 /s3-event.json
 /test-video.txt
+
+/context-files/
+READMEDRAFT.md

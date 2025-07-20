@@ -29,7 +29,7 @@ export class HighlightProcessorStack extends cdk.Stack {
     // Create ECS Cluster
     const cluster = new ecs.Cluster(this, 'VideoProcessorCluster', {
       vpc,
-      clusterName: 'video-processor-cluster',
+      clusterName: `video-processor-cluster-${this.stackName}`,
     });
 
     // Create Auto Scaling Group for GPU instancesy
@@ -37,9 +37,9 @@ export class HighlightProcessorStack extends cdk.Stack {
           vpc,
           instanceType: new ec2.InstanceType('t3.medium'),
           machineImage: ecs.EcsOptimizedImage.amazonLinux2(ecs.AmiHardwareType.STANDARD), // Standard AMI
-          minCapacity: 0,
+          minCapacity: 1, // Keep at least one instance running to accept tasks
           maxCapacity: 2,
-          desiredCapacity: 1,
+          desiredCapacity: 1, // Ensure one instance is running on deployment
           securityGroup,
     });
 
@@ -54,7 +54,7 @@ export class HighlightProcessorStack extends cdk.Stack {
 
     // Create CloudWatch Log Group
     const logGroup = new logs.LogGroup(this, 'VideoProcessorLogs', {
-      logGroupName: '/ecs/video-processor',
+      logGroupName: `/ecs/video-processor-${this.stackName}`,
       retention: logs.RetentionDays.ONE_WEEK,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     }); // Logs for ECS tasks are retained for one week and then deleted
@@ -97,7 +97,7 @@ export class HighlightProcessorStack extends cdk.Stack {
 
     // Create S3 Bucket
     const videoBucket = new s3.Bucket(this, 'VideoBucket', {
-      bucketName: `video-uploads-${this.account}-${this.region}`,
+      bucketName: `video-uploads-${this.account}-${this.region}-${this.stackName}`.toLowerCase(),
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
     }); // S3 bucket to store video uploads
@@ -105,11 +105,19 @@ export class HighlightProcessorStack extends cdk.Stack {
     // Grant bucket access to task role
     videoBucket.grantRead(taskRole);
 
+    // Create a dedicated Log Group for the Lambda for easier debugging
+    const triggerLambdaLogGroup = new logs.LogGroup(this, 'TriggerLambdaLogGroup', {
+      logGroupName: `/aws/lambda/${this.stackName}-VideoTriggerLambda`,
+      retention: logs.RetentionDays.ONE_WEEK,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
     // Create Lambda Function
     const triggerLambda = new lambda.Function(this, 'VideoTriggerLambda', {
       runtime: lambda.Runtime.PYTHON_3_9,
       handler: 'handler.lambda_handler',
       code: lambda.Code.fromAsset('./lambda'),
+      logGroup: triggerLambdaLogGroup,
       timeout: cdk.Duration.minutes(5),
       environment: {
         CLUSTER_NAME: cluster.clusterName,
@@ -120,15 +128,18 @@ export class HighlightProcessorStack extends cdk.Stack {
       },
     });
 
-    // Grant Lambda permissions to run ECS tasks
+    // Grant Lambda permissions to run the specific ECS task
     triggerLambda.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
-      actions: [
-        'ecs:RunTask',
-        'ecs:DescribeTasks',
-        'iam:PassRole',
-      ],
-      resources: ['*'],
+      actions: ['ecs:RunTask'],
+      resources: [taskDefinition.taskDefinitionArn],
+    }));
+
+    // Grant Lambda permission to pass the task and execution roles to ECS
+    triggerLambda.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['iam:PassRole'],
+      resources: [taskRole.roleArn, executionRole.roleArn],
     }));
 
     // Add S3 notification to trigger Lambda
@@ -137,6 +148,16 @@ export class HighlightProcessorStack extends cdk.Stack {
       new s3n.LambdaDestination(triggerLambda), // Lambda function to be triggered
       { prefix: 'videos/' }
     );
+
+    // Explicitly grant S3 permission to invoke the Lambda.
+    // Note: s3n.LambdaDestination should do this automatically, but adding it
+    // explicitly can resolve potential misconfigurations.
+    triggerLambda.addPermission('S3InvokePermission', {
+      principal: new iam.ServicePrincipal('s3.amazonaws.com'),
+      action: 'lambda:InvokeFunction',
+      sourceArn: videoBucket.bucketArn,
+      sourceAccount: this.account,
+    });
 
     // Outputs
     new cdk.CfnOutput(this, 'BucketName', {
@@ -153,5 +174,11 @@ export class HighlightProcessorStack extends cdk.Stack {
       value: logGroup.logGroupName,
       description: 'CloudWatch log group for ECS tasks',
     });
+
+    new cdk.CfnOutput(this, 'LambdaLogGroupName', {
+      value: triggerLambda.logGroup.logGroupName,
+      description: 'CloudWatch log group for the trigger Lambda function',
+    });
+    
   }
 }

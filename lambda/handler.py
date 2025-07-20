@@ -15,6 +15,10 @@ def lambda_handler(event, context):
     """
     Lambda function triggered by S3 uploads to start ECS video processing task
     """
+
+    # Log the entire event for debugging purposes to confirm invocation
+    logger.info(f"Lambda triggered. Event: {json.dumps(event)}")
+
     try:
         # Parse S3 event
         for record in event['Records']:
