@@ -7,6 +7,8 @@ import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as autoscaling from 'aws-cdk-lib/aws-autoscaling';
+import * as ecr_assets from 'aws-cdk-lib/aws-ecr-assets';
+import * as secretsmanager from 'aws-cdk-lib/aws-secrets-manager';
 import { Construct } from 'constructs';
 
 export class HighlightProcessorStack extends cdk.Stack {
@@ -34,13 +36,14 @@ export class HighlightProcessorStack extends cdk.Stack {
 
     // Create Auto Scaling Group for GPU instancesy
     const autoScalingGroup = new autoscaling.AutoScalingGroup(this, 'VideoProcessorASG', {
-          vpc,
-          instanceType: new ec2.InstanceType('t3.medium'),
-          machineImage: ecs.EcsOptimizedImage.amazonLinux2(ecs.AmiHardwareType.STANDARD), // Standard AMI
-          minCapacity: 1, // Keep at least one instance running to accept tasks
-          maxCapacity: 2,
-          desiredCapacity: 1, // Ensure one instance is running on deployment
-          securityGroup,
+      vpc,
+      // Switched to a GPU-enabled instance type for ML workloads
+      instanceType: ec2.InstanceType.of(ec2.InstanceClass.G4DN, ec2.InstanceSize.XLARGE),
+      // Use the ECS-optimized AMI with GPU support
+      machineImage: ecs.EcsOptimizedImage.amazonLinux2(ecs.AmiHardwareType.GPU),
+      minCapacity: 0, // Can scale to 0 to save costs when idle
+      maxCapacity: 2,
+      securityGroup,
     });
 
     // Add capacity to cluster
@@ -62,9 +65,8 @@ export class HighlightProcessorStack extends cdk.Stack {
     // Create Task Role
     const taskRole = new iam.Role(this, 'VideoProcessorTaskRole', {
       assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
-      managedPolicies: [
-        iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonS3ReadOnlyAccess'),
-      ], // Allows the task to read from S3
+      // The managed policy is removed in favor of more specific grants below
+      // which grant read from 'videos/*' and write to 'results/*'
     });
 
     // Create Execution Role
@@ -83,11 +85,24 @@ export class HighlightProcessorStack extends cdk.Stack {
       networkMode: ecs.NetworkMode.AWS_VPC,
     });
 
+    // Reference the secret from AWS Secrets Manager to pass to the Docker build
+    const huggingFaceTokenSecret = secretsmanager.Secret.fromSecretNameV2(this, 'HuggingFaceTokenSecret', 'hugging_face_token');
+
     // Add Container to Task Definition
     const container = taskDefinition.addContainer('video-processor', {
-      image: ecs.ContainerImage.fromAsset('./video-processing'),
-      memoryLimitMiB: 512, // Reduced for t3.medium instance
-      cpu: 256,             // Reduced for t3.medium instance
+      image: ecs.ContainerImage.fromAsset('./video-processing', {
+        // This securely passes the secret to the Docker build at deploy time
+        // The key 'huggingface_token' must match the 'id' in the Dockerfile RUN command
+        buildSecrets: {
+          huggingface_token: ecr_assets.DockerBuildSecret.fromSecretsManager(huggingFaceTokenSecret, 'HUGGINGFACE_TOKEN'),
+        },
+        // It's good practice to specify the platform
+        platform: ecr_assets.Platform.LINUX_AMD64,
+      }),
+      // Increased resources for a GPU-intensive ML task
+      memoryLimitMiB: 15360, // ~15GB, suitable for g4dn.xlarge (16GiB total)
+      cpu: 4096,             // 4 vCPUs for g4dn.xlarge
+      gpuCpus: 1,            // Request 1 GPU from the instance
       logging: ecs.LogDrivers.awsLogs({
         streamPrefix: 'video-processor',
         logGroup,
@@ -102,8 +117,11 @@ export class HighlightProcessorStack extends cdk.Stack {
       autoDeleteObjects: true,
     }); // S3 bucket to store video uploads
 
-    // Grant bucket access to task role
-    videoBucket.grantRead(taskRole);
+    // Grant specific S3 permissions to the task role
+    // Allow reading from the 'videos/' prefix
+    videoBucket.grantRead(taskRole, 'videos/*');
+    // Allow writing to the 'results/' prefix
+    videoBucket.grantWrite(taskRole, 'results/*');
 
     // Create a dedicated Log Group for the Lambda for easier debugging
     const triggerLambdaLogGroup = new logs.LogGroup(this, 'TriggerLambdaLogGroup', {

@@ -3,7 +3,7 @@ numpy
 transformers
 accelerate
 opencv-python
-Pillow
-decord
-s3fs
+Pillow 
 huggingface_hub
+boto3
+

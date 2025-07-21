@@ -36,9 +36,10 @@ ENV HUGGINGFACE_HUB_CACHE=/app/hf_cache
 # This prevents the token from being stored in any image layer or history.
 RUN --mount=type=secret,id=huggingface_token \
     huggingface-cli login --token $(cat /run/secrets/huggingface_token) && huggingface-cli download google/paligemma2-3b-mix-224
+
 # Copy the application code into the container
-COPY script.py /app/script.py
+COPY *.py /app/
 
 # Set the default command to run when the container starts.
-# This will be changed to main.py in a later phase.
-CMD ["python3", "script.py"]
+# This runs the main orchestrator script.
+CMD ["python3", "main.py"]
