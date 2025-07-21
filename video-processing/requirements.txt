@@ -1,0 +1,9 @@
+pandas
+numpy
+transformers
+accelerate
+opencv-python
+Pillow
+decord
+s3fs
+huggingface_hub
