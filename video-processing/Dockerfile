@@ -32,11 +32,10 @@ ENV HUGGINGFACE_HUB_CACHE=/app/hf_cache
 
 # "Bake" the Pali-Gemma model into the image to avoid downloading it at runtime.
 # A Hugging Face token must be passed as a build argument.
-ARG HUGGINGFACE_TOKEN
-
-# The token is used for this RUN command but is not stored in the final image layer.
-# Using `huggingface-cli login` is more robust. The download will use the login credentials and the cache dir env var.
-RUN huggingface-cli login --token ${HUGGINGFACE_TOKEN} && huggingface-cli download google/paligemma2-3b-mix-224
+# Use a build-time secret mount to securely provide the Hugging Face token.
+# This prevents the token from being stored in any image layer or history.
+RUN --mount=type=secret,id=huggingface_token \
+    huggingface-cli login --token $(cat /run/secrets/huggingface_token) && huggingface-cli download google/paligemma2-3b-mix-224
 # Copy the application code into the container
 COPY script.py /app/script.py
 
