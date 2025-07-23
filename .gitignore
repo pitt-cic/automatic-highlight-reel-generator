@@ -26,7 +26,6 @@ yarn-error.log*
 .DS_Store
 *.log
 .env*
-*.mp4
 
 # Context txt files
 /outputs.txt
@@ -39,4 +38,3 @@ yarn-error.log*
 
 /context-files/
 READMEDRAFT.md
-

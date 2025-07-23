@@ -35,8 +35,8 @@ def main():
     log.info("=== Video Highlight Processor Starting ===")
 
     # 1. Get Configuration from Environment Variables
-    s3_bucket = os.environ.get("S3_BUCKET_NAME") # Changed to match Lambda
-    s3_key = os.environ.get("S3_OBJECT_KEY") # Changed to match Lambda
+    s3_bucket = os.environ.get("S3_BUCKET")
+    s3_key = os.environ.get("S3_KEY")
     event_prompt = os.environ.get("EVENT_PROMPT", DEFAULT_PROMPT)
     skip_inference_test = os.environ.get("SKIP_INFERENCE_TEST", "false").lower() == "true"
 
@@ -44,7 +44,7 @@ def main():
         log.error("S3_BUCKET and S3_KEY environment variables are required.")
         sys.exit(1)
 
-    log.info(f"Processing s3://{s3_bucket}/{s3_key}...")
+    log.info(f"Processing s3://{s3_bucket}/{s3_key}")
     log.info(f"Using event prompt: '{event_prompt}'")
 
     s3_client = boto3.client("s3")

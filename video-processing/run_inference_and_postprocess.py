@@ -141,7 +141,6 @@ def _run_inference_on_video(model, processor, video_path: Path, timestamps_df: p
 
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, _ = frame_rgb.shape
-        # TODO: Make crop coordinates configurable via environment variables
         cropped = frame_rgb[:, int(w * 1 / 3):int(w * 3 / 4)]
         img = Image.fromarray(cropped)
 
