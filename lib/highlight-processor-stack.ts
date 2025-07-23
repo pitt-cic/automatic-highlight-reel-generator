@@ -7,8 +7,8 @@ import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as autoscaling from 'aws-cdk-lib/aws-autoscaling';
-import * as ecr_assets from 'aws-cdk-lib/aws-ecr-assets';
-import * as secretsmanager from 'aws-cdk-lib/aws-secrets-manager';
+import { Platform } from 'aws-cdk-lib/aws-ecr-assets'; 
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
 
 export class HighlightProcessorStack extends cdk.Stack {
@@ -34,18 +34,18 @@ export class HighlightProcessorStack extends cdk.Stack {
       clusterName: `video-processor-cluster-${this.stackName}`,
     });
 
-    // Create Auto Scaling Group for GPU instancesy
+    // Create Auto Scaling Group for GPU instances
     const autoScalingGroup = new autoscaling.AutoScalingGroup(this, 'VideoProcessorASG', {
       vpc,
-      // Switched to a GPU-enabled instance type for ML workloads
+      // GPU-enabled instance type for ML workloads
+      // in lib/highlight-processor-stack.ts
       instanceType: ec2.InstanceType.of(ec2.InstanceClass.G4DN, ec2.InstanceSize.XLARGE),
-      // Use the ECS-optimized AMI with GPU support
       machineImage: ecs.EcsOptimizedImage.amazonLinux2(ecs.AmiHardwareType.GPU),
       minCapacity: 0, // Can scale to 0 to save costs when idle
       maxCapacity: 2,
       securityGroup,
     });
-
+    
     // Add capacity to cluster
     const capacityProvider = new ecs.AsgCapacityProvider(this, 'VideoProcessorCP', {
       autoScalingGroup,
@@ -60,13 +60,22 @@ export class HighlightProcessorStack extends cdk.Stack {
       logGroupName: `/ecs/video-processor-${this.stackName}`,
       retention: logs.RetentionDays.ONE_WEEK,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
-    }); // Logs for ECS tasks are retained for one week and then deleted
+    });
+
+    // Reference the secret from AWS Secrets Manager
+    const huggingFaceTokenSecret = secretsmanager.Secret.fromSecretNameV2(this, 'HuggingFaceTokenSecret', 'hugging_face_token');
 
     // Create Task Role
     const taskRole = new iam.Role(this, 'VideoProcessorTaskRole', {
       assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
-      // The managed policy is removed in favor of more specific grants below
-      // which grant read from 'videos/*' and write to 'results/*'
+      //The task role requires permission to read secrets from secrets manager in order to access the hugging face token. 
+      // Define the policy statement
+      inlinePolicies: {
+        SecretsManagerAccess: new iam.PolicyDocument({
+          statements: [new iam.PolicyStatement({
+            actions: ['secretsmanager:DescribeSecret', 'secretsmanager:GetSecretValue'],
+            resources: [huggingFaceTokenSecret.secretArn],
+    })]})},
     });
 
     // Create Execution Role
@@ -74,8 +83,20 @@ export class HighlightProcessorStack extends cdk.Stack {
       assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
       managedPolicies: [
         iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonECSTaskExecutionRolePolicy'),
-      ], // Provides necessary permissions for ECS task execution
+      ],
     });
+
+    huggingFaceTokenSecret.grantRead(taskRole);
+    huggingFaceTokenSecret.grantRead(executionRole); // The execution role also needs access to pass the secret
+
+    // Grant the EC2 Instance Role permission to use the Launch Template.
+    // This fixes the original "You are not authorized to use launch template" error.
+    autoScalingGroup.role.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ['ec2:UseLaunchTemplate'],
+        resources: ['*'], // Ideally, scope this down to the specific launch template ARN
+      })
+    );
 
     // Create Task Definition
     const taskDefinition = new ecs.Ec2TaskDefinition(this, 'VideoProcessorTaskDef', {
@@ -85,29 +106,35 @@ export class HighlightProcessorStack extends cdk.Stack {
       networkMode: ecs.NetworkMode.AWS_VPC,
     });
 
-    // Reference the secret from AWS Secrets Manager to pass to the Docker build
-    const huggingFaceTokenSecret = secretsmanager.Secret.fromSecretNameV2(this, 'HuggingFaceTokenSecret', 'hugging_face_token');
-
     // Add Container to Task Definition
-    const container = taskDefinition.addContainer('video-processor', {
+    taskDefinition.addContainer('video-processor', {
       image: ecs.ContainerImage.fromAsset('./video-processing', {
-        // This securely passes the secret to the Docker build at deploy time
-        // The key 'huggingface_token' must match the 'id' in the Dockerfile RUN command
-        buildSecrets: {
-          huggingface_token: ecr_assets.DockerBuildSecret.fromSecretsManager(huggingFaceTokenSecret, 'HUGGINGFACE_TOKEN'),
-        },
-        // It's good practice to specify the platform
-        platform: ecr_assets.Platform.LINUX_AMD64,
+        platform: Platform.LINUX_AMD64,
       }),
-      // Increased resources for a GPU-intensive ML task
-      memoryLimitMiB: 15360, // ~15GB, suitable for g4dn.xlarge (16GiB total)
-      cpu: 4096,             // 4 vCPUs for g4dn.xlarge
-      gpuCpus: 1,            // Request 1 GPU from the instance
+      // Resources for GPU-intensive ML task
+      memoryLimitMiB: 15360, // ~15GB for g4dn.xlarge (16GiB total)
+      cpu: 4096, // 4 vCPUs for g4dn.xlarge
+      gpuCount: 1,           // Request 1 GPU
       logging: ecs.LogDrivers.awsLogs({
         streamPrefix: 'video-processor',
         logGroup,
       }),
-      essential: true, // Marks this container as essential for the task
+      // Set the command to run the main orchestrator
+      command: ["python3", "main.py"],
+      environment: {
+        // Pass the event prompt to the container
+        EVENT_PROMPT: "<image> Is there a person in the air jumping into the water?",
+        // Add AWS_REGION for boto3
+        AWS_REGION: this.region,
+      },
+      // Pass the Hugging Face token as a secret environment variable
+      secrets: {
+        HUGGINGFACE_TOKEN: ecs.Secret.fromSecretsManager(
+          huggingFaceTokenSecret, 
+          'HUGGINGFACE_TOKEN'
+        ),
+      },
+      essential: true,
     });
 
     // Create S3 Bucket
@@ -115,15 +142,13 @@ export class HighlightProcessorStack extends cdk.Stack {
       bucketName: `video-uploads-${this.account}-${this.region}-${this.stackName}`.toLowerCase(),
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
-    }); // S3 bucket to store video uploads
+    });
 
     // Grant specific S3 permissions to the task role
-    // Allow reading from the 'videos/' prefix
     videoBucket.grantRead(taskRole, 'videos/*');
-    // Allow writing to the 'results/' prefix
-    videoBucket.grantWrite(taskRole, 'results/*');
+    videoBucket.grantReadWrite(taskRole, 'results/*');
 
-    // Create a dedicated Log Group for the Lambda for easier debugging
+    // Create a dedicated Log Group for the Lambda
     const triggerLambdaLogGroup = new logs.LogGroup(this, 'TriggerLambdaLogGroup', {
       logGroupName: `/aws/lambda/${this.stackName}-VideoTriggerLambda`,
       retention: logs.RetentionDays.ONE_WEEK,
@@ -146,14 +171,14 @@ export class HighlightProcessorStack extends cdk.Stack {
       },
     });
 
-    // Grant Lambda permissions to run the specific ECS task
+    // Grant Lambda permissions to run the ECS task
     triggerLambda.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: ['ecs:RunTask'],
       resources: [taskDefinition.taskDefinitionArn],
     }));
 
-    // Grant Lambda permission to pass the task and execution roles to ECS
+    // Grant Lambda permission to pass roles to ECS
     triggerLambda.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: ['iam:PassRole'],
@@ -163,20 +188,14 @@ export class HighlightProcessorStack extends cdk.Stack {
     // Add S3 notification to trigger Lambda
     videoBucket.addEventNotification(
       s3.EventType.OBJECT_CREATED,
-      new s3n.LambdaDestination(triggerLambda), // Lambda function to be triggered
+      new s3n.LambdaDestination(triggerLambda),
       { prefix: 'videos/' }
     );
 
-    // Explicitly grant S3 permission to invoke the Lambda.
-    // Note: s3n.LambdaDestination should do this automatically, but adding it
-    // explicitly can resolve potential misconfigurations.
-    triggerLambda.addPermission('S3InvokePermission', {
-      principal: new iam.ServicePrincipal('s3.amazonaws.com'),
-      action: 'lambda:InvokeFunction',
-      sourceArn: videoBucket.bucketArn,
-      sourceAccount: this.account,
-    });
-
+    // NOTE: The s3n.LambdaDestination construct automatically adds the necessary 
+    // lambda:InvokeFunction permission to the Lambda's policy.
+    // The explicit `triggerLambda.addPermission` call is redundant and has been removed.
+    
     // Outputs
     new cdk.CfnOutput(this, 'BucketName', {
       value: videoBucket.bucketName,
@@ -194,9 +213,20 @@ export class HighlightProcessorStack extends cdk.Stack {
     });
 
     new cdk.CfnOutput(this, 'LambdaLogGroupName', {
-      value: triggerLambda.logGroup.logGroupName,
+      value: triggerLambda.logGroup?.logGroupName || 'No log group',
       description: 'CloudWatch log group for the trigger Lambda function',
     });
+
     
+    // Debug output for troubleshooting
+    new cdk.CfnOutput(this, 'TaskDefinitionArn', {
+      value: taskDefinition.taskDefinitionArn,
+      description: 'Task definition ARN for debugging',
+    });
+    
+    new cdk.CfnOutput(this, 'SecretArn', {
+      value: huggingFaceTokenSecret.secretArn,
+      description: 'Hugging Face token secret ARN',
+    });
   }
 }
