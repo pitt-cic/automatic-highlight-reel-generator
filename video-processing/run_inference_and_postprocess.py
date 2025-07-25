@@ -14,7 +14,7 @@ from transformers import AutoProcessor, PaliGemmaForConditionalGeneration
 MODEL_ID = "google/paligemma2-3b-mix-224"
 DEFAULT_FPS = 4
 DEFAULT_THRESHOLD = 0.845
-BATCH_SIZE = 150
+BATCH_SIZE = 16
 
 log = logging.getLogger(__name__)
 
@@ -141,8 +141,12 @@ def _run_inference_on_video(model, processor, video_path: Path, timestamps_df: p
 
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, _ = frame_rgb.shape
+        # TODO: Make crop coordinates configurable via environment variables
         cropped = frame_rgb[:, int(w * 1 / 3):int(w * 3 / 4)]
         img = Image.fromarray(cropped)
+
+        # Explicitly resize the image to the model's expected input size.
+        img = img.resize((224, 224))
 
         batch_images.append(img)
         batch_frame_numbers.append(frame_idx)
