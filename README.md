@@ -1,6 +1,3 @@
-<<<<<<< HEAD
-# automatic-highlight-reel-generator
-=======
 # Automatic Highlight Reel Generator
 
 | Index | Description |
