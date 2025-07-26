@@ -1,6 +1,3 @@
-<<<<<<< HEAD
-# automatic-highlight-reel-generator
-=======
 # Automatic Highlight Reel Generator
 
 | Index | Description |
@@ -47,7 +44,7 @@ Coaches, athletes, and staff in many sports record long practice or game session
 
 ### Architecture Diagram
 
-![HighlightProcessorDiagram2.png](/public/HighlightProcessorDiagram2.png)
+![HighlightProcessorDiagram2.png](/public/HighlightProcessorDiagram.png)
 
 ### Functionality
 
@@ -365,4 +362,3 @@ This project is designed and developed with guidance and support from the **Univ
 > To be updated
 
 This project will be distributed under an open-source license.
->>>>>>> dev
