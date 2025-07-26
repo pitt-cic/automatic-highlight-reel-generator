@@ -82,8 +82,6 @@ The end-to-end workflow is designed as follows:
 
 > To be updated
 
-- The ECS tasks are configured to run on **g4dn.2xlarge** GPU instances to support the compute-intensive inference process.
-
 ---
 Based on the provided context, I'll create detailed Deployment and How to Use sections for your README:
 
