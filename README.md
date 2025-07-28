@@ -83,8 +83,6 @@ The end-to-end workflow is designed as follows:
 > To be updated
 
 ---
-Based on the provided context, I'll create detailed Deployment and How to Use sections for your README:
-
 ## Deployment
 
 This section provides a complete guide for deploying the Automatic Highlight Reel Generator on AWS.
