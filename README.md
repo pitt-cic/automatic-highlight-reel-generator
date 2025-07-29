@@ -8,7 +8,7 @@
 | [How to Use](#how-to-use) | Instructions to use the highlight generator. |
 | [Algorithm](#algorithm) | An explanation of the three-stage video processing pipeline. |
 | [Lessons Learned](#lessons-learned) | Limitations and lessons learned. |
-| [Bill Of Materials](#bill-of-materials) | Cost of deployment. |
+| [Performance and Cost](#performance-and-cost) | A guide to performance and costs for different instances. |
 | [Credits](#credits) | Meet the team behind this project. |
 | [License](#license) | License details. |
 
@@ -77,11 +77,6 @@ The end-to-end workflow is designed as follows:
 - Pali-Gemma-2
 - PyTorch
 - FFmpeg
-
-### Hardware
-
-> To be updated
-
 ---
 ## Deployment
 
@@ -334,11 +329,32 @@ In the final stage, the system uses the predicted intervals from Stage 2 to crea
 
 ---
 
-## Bill Of Materials
+## Performance and Cost
+This section provides cost and performance estimates for deploying and running the Automatic Highlight Reel Generator on AWS. 
 
-> To be updated
+*Note: These figures are estimates. Actual costs and processing times may vary based on video characteristics, system load, and AWS pricing changes.*
 
-This section will be updated with cost estimates for deployment and operation.
+### AWS EC2 Instance: g4dn.2xlarge
+
+* **Instance Type:** g4dn.2xlarge
+* **vCPUs:** 8
+* **Memory:** 32 GiB
+* **GPU:** 1x NVIDIA T4
+* **On-Demand Price (us-east-1):** Approximately $0.752 per hour
+* ``BATCH_SIZE = 16``  
+
+**Performance and Cost Estimates**
+
+| Video Length (Original) | Processing Time (Total) | Inference Speed (Avg. FPS) | Estimated Cost |
+| :--- | :--- | :--- | :--- |
+| ~1 minute | ~33 seconds | ~10.14 FPS | < $0.01 |
+| ~15 minutes | ~10 minutes | ~8.98 FPS | ~ $0.13 |
+| ~2 hours, 6 minutes | ~90 minutes | ~8.94 FPS | ~ $1.13 |
+
+
+> To be updated with performance and cost data for other GPU-enabled EC2 instance types. 
+
+
 
 ---
 
