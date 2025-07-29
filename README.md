@@ -343,14 +343,13 @@ This section provides cost and performance estimates for deploying and running t
 * **On-Demand Price (us-east-1):** Approximately $0.752 per hour
 * ``BATCH_SIZE = 16``  
 
-
-**Note:** "Real-Time Speed" compares the total processing time to the original video’s length (a value greater than 1.0× is faster than real-time). "Inference Speed" measures how quickly the model processes the downsampled video (at 4 FPS).
-
 | Video Length (Original) | Processing Time (Total) | Real-Time Speed             | Inference Speed (Avg. FPS) | Estimated Cost |
 |--------------------------|--------------------------|------------------------------|-----------------------------|----------------|
 | ~1 minute                | ~33 seconds              | ~1.3× faster than real-time  | ~10.14 FPS                  | < $0.01        |
 | ~15 minutes              | ~10 minutes              | ~1.5× faster than real-time  | ~8.98 FPS                   | ~ $0.13        |
 | ~2 hours, 6 minutes      | ~90 minutes              | ~1.4× faster than real-time  | ~8.94 FPS                   | ~ $1.13        |
+
+*Note: "Real-Time Speed" compares the total processing time to the original video’s length (a value greater than 1.0× is faster than real-time). "Inference Speed" measures how quickly the model processes the downsampled video (at 4 FPS).*
 
 
 > To be updated with performance and cost data for other GPU-enabled EC2 instance types. 
