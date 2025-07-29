@@ -9,39 +9,39 @@ import cv2
 from pathlib import Path
 from PIL import Image
 from transformers import AutoProcessor, PaliGemmaForConditionalGeneration
-
-# === CONFIG ===
-MODEL_ID = "google/paligemma2-3b-mix-224"
-DEFAULT_FPS = 4
-DEFAULT_THRESHOLD = 0.845
-BATCH_SIZE = 16
+import threading
+from tqdm import tqdm
 
 log = logging.getLogger(__name__)
 
-# === ENV SETUP ===
+# --- Environment and Device Setup ---
 os.environ["TORCHDYNAMO_DISABLE"] = "1"
 torch.cuda.empty_cache()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 log.info(f"Using device: {device}")
 
-# === Load model and processor ===
-def load_model():
-    """Loads the PaliGemma model and processor."""
-    log.info(f"Loading model '{MODEL_ID}' to device '{device}'...")
-    processor = AutoProcessor.from_pretrained(MODEL_ID)
+
+# --- Model Loading ---
+def load_model(model_id: str):
+    """Loads the PaliGemma model and processor from the specified model_id."""
+    log.info(f"Loading model '{model_id}' to device '{device}'...")
+    start_time = time.time()
+    processor = AutoProcessor.from_pretrained(model_id)
     model = PaliGemmaForConditionalGeneration.from_pretrained(
-        MODEL_ID,
+        model_id,
         torch_dtype=torch.float16,
         low_cpu_mem_usage=True,
     ).to(device)
     model.eval()
-    log.info("Model loaded and ready.")
+    log.info(f"Model loaded and ready in {time.time() - start_time:.2f}s.")
     return model, processor
 
-# === GPU UTIL POLLING ===
+
+# --- GPU Utilization Polling ---
 polling = False
 gpu_utils = []
 def poll_gpu_utilization(interval=0.5):
+    """Polls GPU utilization at a given interval."""
     global polling, gpu_utils
     while polling:
         try:
@@ -52,35 +52,37 @@ def poll_gpu_utilization(interval=0.5):
             util = int(output.strip())
             gpu_utils.append(util)
         except Exception:
-            gpu_utils.append(0)
+            gpu_utils.append(0) # Append 0 if nvidia-smi fails
         time.sleep(interval)
 
-# === Inference ===
-def _run_inference_on_video(model, processor, video_path: Path, timestamps_df: pd.DataFrame, prompt: str) -> pd.DataFrame:
+
+# --- Core Inference Function ---
+def _run_inference_on_video(
+    model, processor, video_path: Path, timestamps_df: pd.DataFrame, 
+    prompt: str, batch_size: int, crop_coords: dict, max_new_tokens: int, target_fps: int
+) -> pd.DataFrame:
     """Helper function to run the core inference loop on a video file."""
-    start_time = time.time()
+    inference_start_time = time.time()
     cap = cv2.VideoCapture(str(video_path))
     assert cap.isOpened(), f"Cannot open video: {video_path}"
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     log.info(f"Total frames to process: {total_frames}")
 
-    if len(timestamps_df) != total_frames:
-        log.warning(f"Timestamps CSV frame count {len(timestamps_df)} != video frame count {total_frames}")
-    else:
-        log.info(f"Timestamps CSV loaded with {len(timestamps_df)} rows")
-
-    # GPU polling can be added back if detailed metrics are needed
-    # global polling
-    # polling = True
-    # gpu_utils.clear()
-    # poll_thread = threading.Thread(target=poll_gpu_utilization)
-    # poll_thread.start()
+    # Start GPU polling
+    global polling, gpu_utils
+    polling = True
+    gpu_utils.clear()
+    poll_thread = threading.Thread(target=poll_gpu_utilization)
+    poll_thread.start()
 
     results = []
     batch_images = []
     batch_frame_numbers = []
+    
+    pbar = tqdm(total=total_frames, desc="✨ Running Inference", unit="frame")
 
     def process_batch():
+        """Processes a batch of frames."""
         nonlocal batch_images, batch_frame_numbers
         if not batch_images:
             return
@@ -89,7 +91,7 @@ def _run_inference_on_video(model, processor, video_path: Path, timestamps_df: p
             inputs = processor(images=batch_images, text=[prompt] * len(batch_images), return_tensors="pt", padding=True).to(device)
             outputs = model.generate(
                 **inputs,
-                max_new_tokens=5,
+                max_new_tokens=max_new_tokens, # Use config value
                 output_scores=True,
                 return_dict_in_generate=True,
             )
@@ -100,26 +102,25 @@ def _run_inference_on_video(model, processor, video_path: Path, timestamps_df: p
 
             for i in range(len(batch_images)):
                 answer = answers[i].lower().strip().split("\n")[-1]
-                token_probs = []
-                for step_logits, token_id_tensor in zip(scores, generated_tokens[i, -len(scores):]):
-                    token_id = token_id_tensor.item()
-                    probs = F.softmax(step_logits, dim=-1)
-                    token_prob = probs[i, token_id].item()
-                    token_probs.append(token_prob)
+                token_probs = [
+                    F.softmax(step_logits, dim=-1)[i, token_id.item()].item()
+                    for step_logits, token_id in zip(scores, generated_tokens[i, -len(scores):])
+                ]
 
                 confidence = sum(token_probs) / len(token_probs) if token_probs else 0.0
                 frame_idx = batch_frame_numbers[i]
                 
-                # Lookup original frame number and timestamp from CSV by inference_frame_number
+                # Get timestamp info from the dataframe
                 row = timestamps_df[timestamps_df["inference_frame_number"] == frame_idx]
                 if row.empty:
+                    # Fallback if frame not in CSV (should not happen in normal flow)
                     orig_frame_num = None
-                    orig_timestamp = round(frame_idx / DEFAULT_FPS, 2)
+                    orig_timestamp = round(frame_idx / target_fps, 2)
                 else:
                     orig_frame_num = int(row["original_frame_number"].values[0])
                     orig_timestamp = float(row["original_timestamp_sec"].values[0])
 
-                pred_label = "yes" if answer == "yes" else "no"
+                pred_label = "yes" if "yes" in answer else "no"
 
                 results.append({
                     "inference_frame_number": frame_idx,
@@ -128,11 +129,12 @@ def _run_inference_on_video(model, processor, video_path: Path, timestamps_df: p
                     "predicted_label": pred_label,
                     "confidence": confidence
                 })
-
-        log.info(f"Processed batch of {len(batch_images)} frames. Total processed: {results[-1]['inference_frame_number'] + 1}/{total_frames}")
+        
+        pbar.update(len(batch_images))
         batch_images.clear()
         batch_frame_numbers.clear()
 
+    # Main video processing loop
     frame_idx = 0
     while True:
         success, frame = cap.read()
@@ -141,114 +143,125 @@ def _run_inference_on_video(model, processor, video_path: Path, timestamps_df: p
 
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, _ = frame_rgb.shape
-        # TODO: Make crop coordinates configurable via environment variables
-        cropped = frame_rgb[:, int(w * 1 / 3):int(w * 3 / 4)]
-        img = Image.fromarray(cropped)
-
-        # Explicitly resize the image to the model's expected input size.
-        img = img.resize((224, 224))
+        # Use crop coordinates from config
+        crop_start = int(w * crop_coords['start'])
+        crop_end = int(w * crop_coords['end'])
+        cropped = frame_rgb[:, crop_start:crop_end]
+        img = Image.fromarray(cropped).resize((224, 224))
 
         batch_images.append(img)
         batch_frame_numbers.append(frame_idx)
 
-        if len(batch_images) >= BATCH_SIZE:
+        # Use batch_size from config
+        if len(batch_images) >= batch_size:
             process_batch()
 
         frame_idx += 1
 
-    process_batch()
+    process_batch() # Process the final batch
+    pbar.close()
     cap.release()
-    # polling = False
-    # poll_thread.join()
+    
+    # Stop GPU polling and report stats
+    polling = False
+    poll_thread.join()
 
-    elapsed = time.time() - start_time
-    log.info(f"Inference finished in {elapsed:.1f}s")
+    elapsed = time.time() - inference_start_time
+    inference_fps = total_frames / elapsed if elapsed > 0 else 0
+    avg_gpu_util = sum(gpu_utils) / len(gpu_utils) if gpu_utils else 0
+    max_gpu_util = max(gpu_utils) if gpu_utils else 0
+
+    log.info(f"Inference finished in {elapsed:.1f}s. Average FPS: {inference_fps:.2f}")
+    log.info(f"GPU Utilization -> Average: {avg_gpu_util:.2f}%, Peak: {max_gpu_util:.2f}%")
     return pd.DataFrame(results).sort_values("inference_frame_number")
 
-# === Postprocessing ===
-def merge_intervals(intervals, max_gap=3.5):
+
+# --- Post-Processing Functions ---
+def merge_intervals(intervals, max_gap_sec: float):
+    """Merges intervals that are closer than max_gap_sec."""
     if not intervals:
         return []
     intervals = sorted(intervals, key=lambda x: x["start"])
     merged = [intervals[0]]
     for current in intervals[1:]:
         prev = merged[-1]
-        if current["start"] - prev["end"] <= max_gap:
-            merged[-1] = {
-                "start": prev["start"],
-                "end": max(prev["end"], current["end"])
-            }
+        if current["start"] - prev["end"] <= max_gap_sec: # Use config value
+            merged[-1]["end"] = max(prev["end"], current["end"])
         else:
             merged.append(current)
     return merged
 
-def postprocess_predictions(df: pd.DataFrame, threshold: float) -> list[dict]:
-    """Filters, groups, and buffers raw predictions to create event intervals."""
+def postprocess_predictions(df: pd.DataFrame, config: dict) -> list[dict]:
+    """Filters, groups, and buffers raw predictions to create event intervals using config."""
     df = df.copy()
+    # Use confidence_threshold from config
     df['status'] = df.apply(
-        lambda r: 'yes' if r['predicted_label'] == 'yes' and r['confidence'] >= threshold else 'uncertain',
+        lambda r: 'yes' if r['predicted_label'] == 'yes' and r['confidence'] >= config['confidence_threshold'] else 'no',
         axis=1
     )
     yes_df = df[df['status'] == 'yes']
     timestamps = yes_df['timestamp_sec'].tolist()
+    timestamps.sort()
 
-    # Filter isolated detections
-    filtered_ts = []
-    for i, ts in enumerate(timestamps):
-        neighbors = [t for j, t in enumerate(timestamps) if j != i and abs(t - ts) <= 2.5]
-        if neighbors:
-            filtered_ts.append(ts)
-
-    # Group by ≤2.5s
-    filtered_ts.sort()
     groups = []
-    if filtered_ts:
-        current = [filtered_ts[0]]
-        for ts in filtered_ts[1:]:
-            if ts - current[-1] <= 2.5:
-                current.append(ts)
+    if timestamps:
+        current_group = [timestamps[0]]
+        for ts in timestamps[1:]:
+            # Use grouping_threshold_sec from config
+            if ts - current_group[-1] <= config['grouping_threshold_sec']:
+                current_group.append(ts)
             else:
-                groups.append(current)
-                current = [ts]
-        groups.append(current)
+                groups.append(current_group)
+                current_group = [ts]
+        groups.append(current_group)
 
-    # Build buffered predicted intervals
-    predicted_dives = []
+    predicted_intervals = []
     for group in groups:
-        start = max(0, group[0] - 1.5)
-        end = group[-1] + 3
-        predicted_dives.append({"start": round(start, 2), "end": round(end, 2)})
+        # Use buffer values from config
+        start = max(0, group[0] - config['buffer_start_sec'])
+        end = group[-1] + config['buffer_end_sec']
+        predicted_intervals.append({"start": round(start, 2), "end": round(end, 2)})
 
-    return merge_intervals(predicted_dives, max_gap=3.5)
+    # Use merge_gap_sec from config
+    return merge_intervals(predicted_intervals, max_gap_sec=config['merge_gap_sec'])
 
+
+# --- Main Orchestrator for this Stage ---
 def run_inference(
     downsampled_video_path: Path,
     timestamps_csv_path: Path,
     output_dir: Path,
     prompt: str,
-    confidence_threshold: float = DEFAULT_THRESHOLD
+    inference_config: dict,
+    post_proc_config: dict,
+    target_fps: int,
 ) -> Path:
-    """
-    Orchestrates the inference and post-processing stage.
-
-    Args:
-        downsampled_video_path: Path to the low-FPS video.
-        timestamps_csv_path: Path to the timestamp mapping CSV.
-        output_dir: Directory to save the final intervals CSV.
-        prompt: The prompt to ask the VLM for each frame.
-        confidence_threshold: The minimum confidence to consider a "yes" prediction.
-
-    Returns:
-        The path to the predicted intervals CSV file.
-    """
-    model, processor = load_model()
-    video_stem = downsampled_video_path.stem.replace("_4fps", "") # Get original stem
+    """Orchestrates the inference and post-processing stage using config parameters."""
+    # Pass model_id from config
+    model, processor = load_model(model_id=inference_config['model_id'])
+    
+    # More robust way to get the original video stem
+    video_stem = downsampled_video_path.stem.rsplit('_', 1)[0]
 
     timestamps_df = pd.read_csv(timestamps_csv_path)
-    raw_predictions_df = _run_inference_on_video(model, processor, downsampled_video_path, timestamps_df, prompt)
+    
+    raw_predictions_df = _run_inference_on_video(
+        model, processor, downsampled_video_path, timestamps_df, prompt,
+        batch_size=inference_config['batch_size'],
+        crop_coords={
+            'start': inference_config['crop_width_start'],
+            'end': inference_config['crop_width_end']
+        },
+        max_new_tokens=inference_config.get('max_new_tokens', 5), # Use get for safe access
+        target_fps=target_fps
+    )
 
-    log.info(f"Post-processing predictions with threshold {confidence_threshold}...")
-    predicted_intervals = postprocess_predictions(raw_predictions_df, confidence_threshold)
+    log.info(f"Post-processing predictions with threshold {post_proc_config['confidence_threshold']}...")
+    post_start = time.time()
+    # Pass the entire post_proc_config dictionary
+    predicted_intervals = postprocess_predictions(raw_predictions_df, post_proc_config)
+    log.info(f"Post-processing finished in {time.time() - post_start:.2f}s")
+
 
     intervals_csv_path = output_dir / f"{video_stem}_predicted_intervals.csv"
     pd.DataFrame(predicted_intervals).to_csv(intervals_csv_path, index=False)

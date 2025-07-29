@@ -1,0 +1,58 @@
+# Video Highlight Pipeline Configuration
+
+# ==================================
+# General & Main Script Settings
+# ==================================
+main:
+  # The default prompt to use if one is not provided via environment variables.
+  default_prompt: "<image> Is there a person in the air jumping into the water?"
+  # The S3 prefix (folder) where the final highlight videos will be uploaded.
+  s3_output_prefix: "results"
+
+# ==================================
+# Stage 1: Downsampling
+# ==================================
+downsampling:
+  # The target frames-per-second to downsample the video to before inference.
+  # A lower value (e.g., 2-4) significantly speeds up processing.
+  target_fps: 4
+
+# ==================================
+# Stage 2: Inference
+# ==================================
+inference:
+  # The model identifier from the Hugging Face Hub.
+  model_id: "google/paligemma2-3b-mix-224"
+  # Number of frames to process in a single batch. Adjust based on VRAM.
+  batch_size: 24
+  # Horizontal cropping start coordinate as a fraction of total width (0.0 to 1.0).
+  crop_width_start: 0.333
+  # Horizontal cropping end coordinate as a fraction of total width (0.0 to 1.0).
+  crop_width_end: 0.75
+
+# ==================================
+# Stage 2.5: Post-Processing
+# ==================================
+post_processing:
+  # The minimum confidence score (0.0 to 1.0) required to consider a "yes" prediction valid.
+  confidence_threshold: 0.845
+  # The maximum time in seconds to group nearby "yes" detections into a single event.
+  grouping_threshold_sec: 2.5
+  # Time in seconds to add to the beginning of a detected event to provide context.
+  buffer_start_sec: 1.5
+  # Time in seconds to add to the end of a detected event.
+  buffer_end_sec: 3.0
+  # The maximum gap in seconds between two event intervals before they are merged into one.
+  merge_gap_sec: 3.5
+
+# ==================================
+# Stage 3: Clipping & Merging
+# ==================================
+clipping:
+  # FFmpeg preset for encoding quality vs. speed trade-off.
+  # Options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow.
+  ffmpeg_preset: "veryfast"
+  # Constant Rate Factor (CRF). Lower values mean better quality and larger file size. (0-51).
+  crf_value: 23
+  # Audio bitrate for the final clips.
+  audio_bitrate: "128k"

@@ -42,7 +42,7 @@ def generate_timestamp_mapping(downsampled_video_path: Path, orig_fps: float, ta
 
 # -------- DOWNSAMPLING --------
 def downsample_video(input_path: Path, output_path: Path, target_fps: int):
-    """Downsamples a video to a target FPS using FFmpeg."""
+    # This function is now just a direct call, no changes needed here
     cmd = [
         "ffmpeg",
         "-y", "-i", str(input_path),
@@ -53,17 +53,10 @@ def downsample_video(input_path: Path, output_path: Path, target_fps: int):
     ]
     subprocess.run(cmd, check=True)
 
-def run_downsampling(input_video_path: Path, output_dir: Path, target_fps: int = 4) -> tuple[Path, Path]:
+# The function signature now requires target_fps instead of having a default.
+def run_downsampling(input_video_path: Path, output_dir: Path, target_fps: int) -> tuple[Path, Path]:
     """
     Orchestrates the video downsampling process.
-
-    Args:
-        input_video_path: Path to the original video file.
-        output_dir: Directory to save the downsampled video and timestamps CSV.
-        target_fps: The target frames per second for the output video.
-
-    Returns:
-        A tuple containing the path to the downsampled video and the timestamps CSV.
     """
     video_stem = input_video_path.stem
     log.info(f"Starting downsampling for '{video_stem}' to {target_fps} FPS...")
