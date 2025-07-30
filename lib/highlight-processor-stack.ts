@@ -178,6 +178,7 @@ export class HighlightProcessorStack extends cdk.Stack {
         SUBNET_IDS: vpc.privateSubnets.map(subnet => subnet.subnetId).join(','),
         SECURITY_GROUP: securityGroup.securityGroupId,
         ASSIGN_PUBLIC_IP: 'DISABLED',
+        CAPACITY_PROVIDER_NAME: capacityProvider.capacityProviderName,
       },
     });
 

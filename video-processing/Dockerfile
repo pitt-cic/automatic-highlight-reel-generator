@@ -18,7 +18,6 @@ WORKDIR /app
 
 # Copy requirements file and install Python dependencies
 COPY requirements.txt .
-
 # Install PyTorch with CUDA 12.1 support
 RUN pip3 install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
@@ -34,8 +33,8 @@ ENV HUGGINGFACE_HUB_CACHE=/app/hf_cache
 ARG HUGGINGFACE_TOKEN
 RUN huggingface-cli login --token ${HUGGINGFACE_TOKEN} && huggingface-cli download google/paligemma2-3b-mix-224
 
-# Copy the application code into the container
-COPY *.py /app/
+# Copy all application code and config files into the container
+COPY . /app/
 
 # Set the default command to run when the container starts.
 # This runs the main orchestrator script.

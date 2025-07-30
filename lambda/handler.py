@@ -33,12 +33,19 @@ def lambda_handler(event, context):
             subnet_ids = os.environ['SUBNET_IDS'].split(',')
             security_group = os.environ['SECURITY_GROUP']
             assign_public_ip = os.environ['ASSIGN_PUBLIC_IP']
+            capacity_provider_name = os.environ['CAPACITY_PROVIDER_NAME'] 
+
 
             
             # Start ECS task
             response = ecs.run_task(
                 cluster=cluster,
-                launchType='EC2',
+                capacityProviderStrategy=[ # <--- ADD THESE LINES
+                    {
+                        'capacityProvider': capacity_provider_name,
+                        'weight': 1,
+                    },
+                ],
                 taskDefinition=task_definition,
                 count=1,
                 networkConfiguration={
