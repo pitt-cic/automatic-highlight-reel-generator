@@ -24,7 +24,7 @@ inference:
   # The model identifier from the Hugging Face Hub.
   model_id: "google/paligemma2-3b-mix-224"
   # Number of frames to process in a single batch. Adjust based on VRAM.
-  batch_size: 24
+  batch_size: 16
   # Horizontal cropping start coordinate as a fraction of total width (0.0 to 1.0).
   crop_width_start: 0.333
   # Horizontal cropping end coordinate as a fraction of total width (0.0 to 1.0).
