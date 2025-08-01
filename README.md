@@ -174,127 +174,123 @@ HighlightProcessorStack.VideoBucketName = highlight-processor-videos-xxxxx
 HighlightProcessorStack.LogGroupName = /ecs/video-processor
 HighlightProcessorStack.ClusterName = HighlightProcessorCluster
 ```
-
-Save these values, especially the **VideoBucketName**, as you'll need them for usage.
-
-### Configuration Options
-
-You can customize the deployment by modifying environment variables in the CDK stack:
-
-- **``EVENT_PROMPT``**: Change the detection prompt (default: "Is there a person in the air jumping into the water?")
-- **Instance Type**: Modify from g4dn.2xlarge to other GPU instances in `highlight-processor-stack.ts`
-- **Confidence Threshold**: Adjust detection sensitivity in the container environment variables
-
 ---
 
 ## How to Use
 
-### Basic Usage
+### Step 1: Get the S3 Bucket Name
 
-1. **Upload a Video**
-
-   Upload your video file to the S3 bucket created during deployment:
-
-   ```bash
-   # Using AWS CLI
-   aws s3 cp your-video.mp4 s3://<VideoBucketName>/videos/
-   
-   # Example
-   aws s3 cp practice-session-2024.mp4 s3://highlight-processor-videos-xxxxx/videos/
-   ```
-
-   Supported formats: MP4, MOV, AVI (any format supported by FFmpeg)
-
-2. **Monitor Processing**
-
-   The pipeline triggers automatically upon upload. Monitor progress in CloudWatch:
-
-   ```bash
-   # Watch logs in real-time
-   aws logs tail /ecs/video-processor --follow
-   
-   # You'll see logs for each stage:
-   # - "=== Video Highlight Processor Starting ==="
-   # - "Stage 1: Downsampling video..."
-   # - "Stage 2: Running inference..."
-   # - "Stage 3: Creating clips..."
-   # - "=== Video Highlight Processor Finished Successfully ==="
-   ```
-
-3. **Download Results**
-
-   ```bash
-   # List results
-   aws s3 ls s3://<VideoBucketName>/results/
-   
-   # Download the highlight reel
-   aws s3 cp s3://<VideoBucketName>/results/your-video_merged_clips.mp4 ./
-   ```
-
-### Custom Event Prompts
-
-To detect different events update, the EVENT_PROMPT environment variable:
-
-```typescript
-// In highlight-processor-stack.ts
-environment: {
-    EVENT_PROMPT: 'Is there a person performing a backflip?',
-    // ... other variables
-}
-```
-
-Example prompts for other sports:
-- Basketball: "Is there a person shooting a basketball?"
-- Gymnastics: "Is there a person performing on the balance beam?"
-- Soccer: "Is there a goal being scored?"
-
-### Monitoring and Troubleshooting
-
-#### Check Task Status
+After a successful deployment, the CDK outputs the name of the S3 bucket created for video uploads. You can retrieve this bucket name from the CloudFormation stack outputs.
 
 ```bash
-# List recent ECS tasks
-aws ecs list-tasks --cluster HighlightProcessorCluster
+# Command to get the bucket name
+BUCKET_NAME=$(aws cloudformation describe-stacks --stack-name HighlightProcessorStack --query 'Stacks[0].Outputs[?         OutputKey==`BucketName`].OutputValue' --output text)
 
-# Describe a specific task
-aws ecs describe-tasks --cluster HighlightProcessorCluster --tasks <task-arn>
+# You can then echo the variable to see the bucket name
+echo $BUCKET_NAME
 ```
 
-#### Common Issues and Solutions
+This will return the bucket name, which will look something like this:
+`video-uploads--us-east-1-highlightprocessorstack`
 
-1. **Task fails to start**
-   - Check ECS cluster has available GPU instances
-   - Verify Docker image was built correctly
-   - Ensure sufficient IAM permissions
+### Step 2: Upload a Video
 
-2. **No output generated**
-   - Check CloudWatch logs for errors
-   - Verify the video format is supported
-   - Ensure S3 permissions allow PutObject to results/
-
-3. **Poor detection quality**
-   - Adjust confidence threshold in the code
-   - Try different prompts that better describe your event
-   - Ensure video quality is sufficient (minimum 720p recommended)
-
-4. **Processing takes too long**
-   - Longer videos naturally take more time
-   - Consider using larger GPU instances 
-   - Check if ECS tasks are queuing due to capacity
-
-### Cleanup
-
-To remove all resources and avoid ongoing charges:
+Upload your video file to the `videos/` prefix in the S3 bucket.
 
 ```bash
-# Empty the S3 bucket first (WARNING: This deletes all videos)
-aws s3 rm s3://<VideoBucketName> --recursive
-
-# Destroy the CDK stack
-cdk destroy
-
-# Confirm deletion when prompted
+# Using the BUCKET_NAME variable from the previous step
+aws s3 cp your-video.mp4 s3://$BUCKET_NAME/videos/
 ```
+
+The pipeline supports any video format compatible with FFmpeg, such as MP4, MOV, and AVI.
+
+### Step 3: Monitor the Pipeline
+
+The pipeline is triggered automatically when a new video is uploaded to the S3 bucket. You can monitor the two main stages of the pipeline through CloudWatch Logs:
+
+1.  **Lambda Trigger**: This function is triggered by the S3 upload and starts the ECS task.
+
+    ```bash
+    # Tail the logs for the Lambda function
+    aws logs tail /aws/lambda/HighlightProcessorStack-VideoTriggerLambda --follow
+
+    # --- Expected Outputs ---
+    # The Lambda logs will show the function starting, processing the S3 event,
+    # and successfully launching the ECS task.
+    [INFO] Lambda triggered. Event: {"Records": [{"s3": {"object": {"key": "videos/your-video.mp4"}}}]}
+    [INFO] Processing file: s3://video-uploads--us-east-1-highlightprocessorstack/videos/your-video.mp4
+    [INFO] Started ECS task: arn:aws:ecs:us-east-1::task/video-processor-cluster-HighlightProcessorStack/...
+    ```
+
+2.  **ECS Task Processing**: This is where the main video processing happens. The log group is named after your CDK stack.
+
+    ```bash
+    # Tail the logs for the ECS task
+    aws logs tail /ecs/video-processor-HighlightProcessorStack --follow
+
+    # --- Expected Outputs ---
+    # The ECS logs show the detailed progress of the video processing pipeline,
+    # from downsampling and inference to the final clipping and merging.
+    [INFO] === Video Highlight Processor Starting ===
+    [INFO] Processing s3://<bucket_name>/videos/your-video.mp4
+
+    [INFO] --- Stage 1 (Downsampling) completed in 3.07s ---
+    [INFO] Starting downsampling for '1min_dive' to 4 FPS...
+    [INFO] Downsampled video saved to: /tmp/tmphbi7ri49/4fps.mp4
+
+    [INFO] --- Stage 2 (Inference) completed in 25.43s ---
+    [INFO] Loading model 'google/paligemma2-3b-mix-224' to device 'cuda'...
+    [INFO] Running Inference: 100%|██████████| 171/171 [00:15<00:00, 10.90frame/s]
+    [INFO] Saved 3 predicted intervals to: /tmp/tmphbi7ri49/predicted_intervals.csv
+
+    [INFO] --- Stage 3 (Clipping & Merging) completed in 3.55s ---
+    [INFO] Extracting clip 1/3: 9.43s to 17.40s -> 1min_dive_clip_001.mp4
+    [INFO] Merging 3 clips into highlights.mp4...
+
+    [INFO] Uploading final highlight video to s3://<bucket_name>/results/highlights.mp4
+    [INFO] === Video Highlight Processor Finished Successfully in 33.76s ===
+    ```
+
+
+
+### Step 4: Download the Highlight Reel
+
+Once the processing is complete, the final highlight reel will be available in the `results/` prefix of your S3 bucket.
+
+```bash
+# List the results in the bucket
+aws s3 ls s3://$BUCKET_NAME/results/
+
+# Download the highlight reel
+aws s3 cp s3://$BUCKET_NAME/results/your-video_highlights.mp4 ./
+```
+
+### Custom Configuration with `config.yaml`
+
+The `video-processing/config.yaml` file allows for detailed customization of the video processing pipeline. You can modify this file to fine-tune the behavior of each stage.
+
+**Key Configuration Options:**
+
+  * **`main`**:
+      * `default_prompt`: Change the default natural language prompt for event detection.
+      * `s3_output_prefix`: Specify the S3 folder for the final highlight videos.
+  * **`downsampling`**:
+      * `target_fps`: Adjust the frames-per-second for faster processing. A lower value (e.g., 2-4) is recommended.
+  * **`inference`**:
+      * `model_id`: Change the Vision Language Model from Hugging Face.
+      * `batch_size`: Adjust the number of frames processed in a single batch to fit your GPU's VRAM.
+      * `crop_width_start` and `crop_width_end`: Define a horizontal region of interest to focus the analysis.
+  * **`post_processing`**:
+      * `confidence_threshold`: Set the minimum confidence score for a "yes" prediction.
+      * `grouping_threshold_sec`: Group nearby detections into a single event.
+      * `buffer_start_sec` and `buffer_end_sec`: Add extra time to the beginning and end of each clip.
+      * `merge_gap_sec`: Merge event intervals that are close to each other.
+  * **`clipping`**:
+      * `ffmpeg_preset`: Control the trade-off between encoding quality and speed.
+      * `crf_value`: Adjust the video quality of the final clips (lower is better quality).
+      * `audio_bitrate`: Set the audio bitrate for the final video.
+
+> **Note:** After modifying `config.yaml`, Redeploy the CDK stack for the changes to take effect. **A workaround for this will be added in future commits.**
 ---
 
 ## Algorithm
