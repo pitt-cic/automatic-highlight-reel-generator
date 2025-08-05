@@ -326,10 +326,51 @@ In the final stage, the system uses the predicted intervals from Stage 2 to crea
 ---
 
 ## Performance and Cost
-This section provides cost and performance estimates for deploying and running the Automatic Highlight Reel Generator on AWS. 
+This section provides cost and performance estimates for deploying and running the Automatic Highlight Reel Generator on AWS.
 
-*Note: These figures are estimates. Actual costs and processing times may vary based on video characteristics, system load, and AWS pricing changes.*
+*Note: These figures are estimates based on usage in the `us-east-1` (N. Virginia) region. Actual costs and processing times may vary based on video characteristics, system load, and AWS pricing changes.*
 
+### AWS Service Cost Breakdown
+
+The total cost of this pipeline is a sum of the costs of the individual AWS services used. Here's a breakdown of each component:
+
+| Service | Cost Driver | Estimated Cost |
+| :--- | :--- | :--- |
+| **Amazon EC2** | `g4dn.2xlarge` instance for processing | ~$0.752 per hour |
+| **Amazon S3** | Video storage and requests | ~$0.023 per GB/month |
+| **Amazon ECR**| Container image storage | ~$0.10 per GB/month |
+| **NAT Gateway** | Hourly fee and data processing | ~$0.045 per hour + ~$0.045 per GB |
+| **AWS Secrets Manager** | Storing the Hugging Face token | ~$0.40 per secret/month |
+| **Data Transfer**| Outbound to internet (e.g., downloading results) | ~$0.09 per GB |
+| **Orchestration & Monitoring** | Lambda, CloudWatch Logs, Metrics, and Alarms | < $0.01 per video (typically within Free Tier) |
+
+---
+
+### Monthly and Per-Video Cost Estimation
+
+You can think of the total cost in two parts: a fixed monthly "floor" cost to keep the service ready, and a variable cost for each video you process.
+
+#### 1. Monthly Floor Cost (Infrastructure)
+This is the baseline cost to have the infrastructure deployed and ready.
+| Service | Usage | Estimated Monthly Cost |
+| :--- | :--- | :--- |
+| **Amazon ECR** | ~6 GB container image storage | ~$0.60 |
+| **NAT Gateway** | Idle gateway running 24/7 (if not scaled down) | ~$32.40 |
+| **Total Estimated Floor Cost**| | **~$33.40/month** |
+
+#### 2. Cost Per Video Run
+This is the additional cost incurred each time a video is processed. The example below is for a **2-hour video (~10 GB)**.
+
+| Service | Usage (per video) | Estimated Cost |
+| :--- | :--- | :--- |
+| **Amazon EC2** | ~1.5 hours of g4dn.2xlarge | ~$1.13 |
+| **Amazon S3**| 20 GB storage (input/output) for one month | ~$0.46 |
+| **NAT Gateway**| ~1.5 hours active + ~6 GB data processing (model download) | ~$0.34 |
+| **Data Transfer** | ~2 GB highlight reel download to the internet | ~$0.18 |
+| **Orchestration & Monitoring**| Negligible (within Free Tier for low volume) | ~$0.00 |
+| **Total Estimated Cost (per video)**| | **~$2.11** |
+
+---
 ### AWS EC2 Instance: g4dn.2xlarge
 
 * **Instance Type:** g4dn.2xlarge
@@ -337,21 +378,17 @@ This section provides cost and performance estimates for deploying and running t
 * **Memory:** 32 GiB
 * **GPU:** 1x NVIDIA T4
 * **On-Demand Price (us-east-1):** Approximately $0.752 per hour
-* ``BATCH_SIZE = 16``  
+* `BATCH_SIZE = 16`
 
-| Video Length (Original) | Processing Time (Total) | Real-Time Speed             | Inference Speed (Avg. FPS) | Estimated Cost |
-|--------------------------|--------------------------|------------------------------|-----------------------------|----------------|
-| ~1 minute                | ~33 seconds              | ~1.3× faster than real-time  | ~10.14 FPS                  | < $0.01        |
-| ~15 minutes              | ~10 minutes              | ~1.5× faster than real-time  | ~8.98 FPS                   | ~ $0.13        |
-| ~2 hours, 6 minutes      | ~90 minutes              | ~1.4× faster than real-time  | ~8.94 FPS                   | ~ $1.13        |
+| Video Length (Original) | Processing Time (Total) | Real-Time Speed | Inference Speed (Avg. FPS) | Estimated Cost |
+| :--- | :--- | :--- | :--- | :--- |
+| ~1 minute | ~33 seconds | ~1.3× faster than real-time | ~10.14 FPS | < $0.01 |
+| ~15 minutes | ~10 minutes | ~1.5× faster than real-time | ~8.98 FPS | ~ $0.13 |
+| ~2 hours, 6 minutes | ~90 minutes | ~1.4× faster than real-time | ~8.94 FPS | ~ $1.13 |
 
 *Note: "Real-Time Speed" compares the total processing time to the original video’s length (a value greater than 1.0× is faster than real-time). "Inference Speed" measures how quickly the model processes the downsampled video (at 4 FPS).*
 
-
-> To be updated with performance and cost data for other GPU-enabled EC2 instance types. 
-
-
-
+> To be updated with performance and cost data for other GPU-enabled EC2 instance types.
 ---
 
 ## Credits
