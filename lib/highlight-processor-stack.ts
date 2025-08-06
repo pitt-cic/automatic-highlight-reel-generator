@@ -7,7 +7,7 @@ import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as autoscaling from 'aws-cdk-lib/aws-autoscaling';
-import { Platform } from 'aws-cdk-lib/aws-ecr-assets'; 
+import { Platform } from 'aws-cdk-lib/aws-ecr-assets';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
 
@@ -69,20 +69,9 @@ export class HighlightProcessorStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    // Reference the secret from AWS Secrets Manager
-    const huggingFaceTokenSecret = secretsmanager.Secret.fromSecretNameV2(this, 'HuggingFaceTokenSecret', 'hugging_face_token');
-
     // Create Task Role
     const taskRole = new iam.Role(this, 'VideoProcessorTaskRole', {
       assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
-      //The task role requires permission to read secrets from secrets manager in order to access the hugging face token. 
-      // Define the policy statement
-      inlinePolicies: {
-        SecretsManagerAccess: new iam.PolicyDocument({
-          statements: [new iam.PolicyStatement({
-            actions: ['secretsmanager:DescribeSecret', 'secretsmanager:GetSecretValue'],
-            resources: [huggingFaceTokenSecret.secretArn],
-    })]})},
     });
 
     // Create Execution Role
@@ -92,9 +81,6 @@ export class HighlightProcessorStack extends cdk.Stack {
         iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonECSTaskExecutionRolePolicy'),
       ],
     });
-
-    huggingFaceTokenSecret.grantRead(taskRole);
-    huggingFaceTokenSecret.grantRead(executionRole); // The execution role also needs access to pass the secret
 
     // Grant the EC2 Instance Role permission to use the Launch Template.
     // This fixes the original "You are not authorized to use launch template" error.
@@ -136,13 +122,6 @@ export class HighlightProcessorStack extends cdk.Stack {
         EVENT_PROMPT: "<image> Is there a person in the air jumping into the water?",
         // Add AWS_REGION for boto3
         AWS_REGION: this.region,
-      },
-      // Pass the Hugging Face token as a secret environment variable
-      secrets: {
-        HUGGINGFACE_TOKEN: ecs.Secret.fromSecretsManager(
-          huggingFaceTokenSecret, 
-          'HUGGINGFACE_TOKEN'
-        ),
       },
       essential: true,
     });
@@ -233,11 +212,6 @@ export class HighlightProcessorStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'TaskDefinitionArn', {
       value: taskDefinition.taskDefinitionArn,
       description: 'Task definition ARN for debugging',
-    });
-    
-    new cdk.CfnOutput(this, 'SecretArn', {
-      value: huggingFaceTokenSecret.secretArn,
-      description: 'Hugging Face token secret ARN',
     });
   }
 }
