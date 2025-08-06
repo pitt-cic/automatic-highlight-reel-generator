@@ -87,11 +87,17 @@ This section provides a complete guide for deploying the Automatic Highlight Ree
 Before deploying this solution, ensure you have:
 
 1. **AWS Account**: An active AWS account with appropriate permissions to create resources
-2. **AWS CLI**: Installed and configured with credentials (`aws configure`)
-3. **Node.js and npm**: Version 14.x or higher for CDK
-4. **AWS CDK**: Install globally with `npm install -g aws-cdk`
-5. **Docker**: Installed and running on your local machine
-6. **Hugging Face Account**: Required to access the Pali-Gemma model
+2. **AWS Service Quota Increase:** This project uses a `g4dn.2xlarge` EC2 instance, which has 8 vCPUs. By default, many AWS accounts have a vCPU quota of 0 or 4 for "Running On-Demand G and VT instances." You must request a service quota increase before deployment.
+   - Navigate to the Service Quotas console in your AWS account.
+   - Select **Amazon Elastic Compute Cloud (Amazon EC2)**.
+   - Search for the quota named `Running On-Demand G and VT instances`.
+   - Request a quota increase to a value of at least **8**, or request 12 or 16 for flexibility.
+   - **Note:** Quota increases are not instantaneous and may take some time for AWS to approve. It is best to do this step first.
+4. **AWS CLI**: Installed and configured with credentials (`aws configure`)
+5. **Node.js and npm**: Version 14.x or higher for CDK
+6. **AWS CDK**: Install globally with `npm install -g aws-cdk`
+7. **Docker**: Installed and running on your local machine
+8. **Hugging Face Account**: Required to access the Pali-Gemma model
    - Create an account at [Hugging Face](https://huggingface.co)
    - Generate an access token from your account settings
    - Accept the Pali-Gemma model license agreement
