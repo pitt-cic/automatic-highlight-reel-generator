@@ -43,3 +43,6 @@ READMEDRAFT.md
 *.patch
 
 .dockerignore
+
+/aws/
+

@@ -9,7 +9,10 @@
     "watch": "tsc -w",
     "test": "jest",
     "cdk": "cdk"
-  },
+  },  
+  "engines": {
+    "node": ">=18.0.0"
+  },  
   "devDependencies": {
     "@types/jest": "^29.5.14",
     "@types/node": "^22.16.5",

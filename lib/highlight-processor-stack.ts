@@ -8,7 +8,6 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as autoscaling from 'aws-cdk-lib/aws-autoscaling';
 import { Platform } from 'aws-cdk-lib/aws-ecr-assets';
-import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
 
 export class HighlightProcessorStack extends cdk.Stack {
@@ -118,8 +117,6 @@ export class HighlightProcessorStack extends cdk.Stack {
       // Set the command to run the main orchestrator
       command: ["python3", "main.py"],
       environment: {
-        // Pass the event prompt to the container
-        EVENT_PROMPT: "<image> Is there a person in the air jumping into the water?",
         // Add AWS_REGION for boto3
         AWS_REGION: this.region,
       },
@@ -166,6 +163,13 @@ export class HighlightProcessorStack extends cdk.Stack {
       effect: iam.Effect.ALLOW,
       actions: ['ecs:RunTask'],
       resources: [taskDefinition.taskDefinitionArn],
+    }));
+
+    // Grant Lambda permission to read S3 object metadata
+    triggerLambda.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['s3:GetObject', 's3:GetObjectAttributes', 's3:HeadObject'],
+      resources: [videoBucket.arnForObjects('videos/*')],
     }));
 
     // Grant Lambda permission to pass roles to ECS
