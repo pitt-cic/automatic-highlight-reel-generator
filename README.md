@@ -119,7 +119,7 @@ npm run build
 ### Step 2: Configure Environment Variables
 
 ```bash
-HUGGINGFACE_TOKEN='your_huggingface_token_here'
+export HUGGINGFACE_TOKEN='your_huggingface_token_here'
 ```
 
 ### Step 3: Build the Docker Container
