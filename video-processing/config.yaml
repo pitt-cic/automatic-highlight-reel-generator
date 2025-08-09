@@ -26,9 +26,9 @@ inference:
   # Number of frames to process in a single batch. Adjust based on VRAM.
   batch_size: 16
   # Horizontal cropping start coordinate as a fraction of total width (0.0 to 1.0).
-  crop_width_start: 0.333
+  crop_width_start: 0.0
   # Horizontal cropping end coordinate as a fraction of total width (0.0 to 1.0).
-  crop_width_end: 0.75
+  crop_width_end: 1.0
 
 # ==================================
 # Stage 2.5: Post-Processing
