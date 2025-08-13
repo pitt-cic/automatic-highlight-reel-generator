@@ -55,7 +55,6 @@ def poll_gpu_utilization(interval=0.5):
             gpu_utils.append(0) # Append 0 if nvidia-smi fails
         time.sleep(interval)
 
-
 # --- Core Inference Function ---
 def _run_inference_on_video(
     model, processor, video_path: Path, timestamps_df: pd.DataFrame, 
