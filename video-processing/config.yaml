@@ -5,7 +5,7 @@
 # ==================================
 main:
   # The default prompt to use if one is not provided via environment variables.
-  default_prompt: "<image> Is there a person in the air jumping into the water?"
+  default_prompt: "<image> Is there a person in the air jumping into the water? Answer with 'yes' or 'no'.\n"
   # The S3 prefix (folder) where the final highlight videos will be uploaded.
   s3_output_prefix: "results"
 
