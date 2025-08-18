@@ -1,240 +1,205 @@
 import os
+import io
 import time
-from datetime import datetime, timezone
+import tempfile
+import traceback
+from threading import Thread
+from queue import Queue, Empty
+from datetime import timedelta
+import sys
 from pathlib import Path
-import json
 
-import boto3
-from botocore.exceptions import ClientError, BotoCoreError, NoCredentialsError
+# Ensure project root is on sys.path so 'ui.*' imports work when running as a script
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 import streamlit as st
+from botocore.exceptions import ClientError
 
-# --------------------
-# Page Setup
-# --------------------
-st.set_page_config(page_title="Highlight Reel Demo", page_icon="🎬", layout="wide")
-st.title("🎬 Automatic Highlight Reel Generator — Demo UI")
-st.caption("Upload a practice video → pipeline runs on AWS → watch the merged highlight reel here.")
+from ui.config import (
+    INPUT_PREFIX,
+    RESULT_PREFIX,
+    DEFAULT_PROMPT,
+    PROMPT_MAX_CHARS,
+    TARGET_MAX_SIZE_GB,
+    UPLOAD_LIMIT_MB,
+)
+from ui.config import get_initial_settings, persist_settings, limits_bytes
+from ui.aws_client import get_s3_client, discover_bucket_from_stack
+from ui.upload import save_uploaded_to_disk, check_free_space, multipart_upload
+from ui.polling import poll_for_result
+from ui.logs import latest_log_line
 
-try:
-    from streamlit import config as _config
-    CURRENT_MAX_MB = int(_config.get_option("server.maxUploadSize"))
-except Exception:
-    CURRENT_MAX_MB = 200
 
-# --------------------
-# Helpers
-# --------------------
+st.set_page_config(page_title="Highlight Uploader", layout="centered")
 
-def _guess_region() -> str:
-    return boto3.session.Session().region_name or os.environ.get("AWS_REGION") or "us-east-1"
 
-def _get_cf_output_value(outputs, keys):
-    for o in outputs:
-        if o.get("OutputKey") in keys:
-            return o.get("OutputValue")
-    return None
+def _human_size(n: int) -> str:
+    for unit in ["B", "KB", "MB", "GB", "TB"]:
+        if n < 1024 or unit == "TB":
+            return f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n} B"
 
-def autodetect_stack(bucket_state):
-    stack_name = st.session_state.get("stack_name", "HighlightProcessorStack")
-    region = st.session_state.get("aws_region", _guess_region())
-    try:
-        cf = boto3.client("cloudformation", region_name=region)
-        resp = cf.describe_stacks(StackName=stack_name)
-        outputs = resp["Stacks"][0].get("Outputs", [])
-        bucket = _get_cf_output_value(outputs, {"BucketName", "VideoUploadsBucket", "UploadsBucket"})
-        if bucket:
-            st.session_state["bucket_name"] = bucket
-            st.session_state["aws_region"] = region
-            bucket_state.success(f"Detected bucket: s3://{bucket} (region: {region})")
-        else:
-            bucket_state.warning("Couldn't find a bucket output on that stack. Enter it manually below.")
-    except Exception as e:
-        bucket_state.error(f"Auto-detection failed: {e}")
 
-def content_type_for(name: str) -> str:
-    ext = Path(name).suffix.lower()
-    return {
-        ".mp4": "video/mp4",
-        ".mov": "video/quicktime",
-        ".avi": "video/x-msvideo",
-        ".mkv": "video/x-matroska",
-        ".webm": "video/webm",
-    }.get(ext, "application/octet-stream")
-
-# --------------------
-# Sidebar — AWS & Prompt
-# --------------------
 with st.sidebar:
-    st.header("AWS Settings")
-    if "aws_region" not in st.session_state:
-        st.session_state["aws_region"] = _guess_region()
-    if "stack_name" not in st.session_state:
-        st.session_state["stack_name"] = "HighlightProcessorStack"
+    st.header("Settings")
+    s = get_initial_settings()
+    bucket = s.bucket_name
+    region = s.region
+    dry_run = st.toggle("Dry run (no S3 writes)", value=s.dry_run, help="Simulate multipart upload and polling without S3.")
 
-    st.text_input("Region", key="aws_region")
-    st.text_input("Stack name", key="stack_name")
+    if not bucket:
+        st.caption("Bucket not found in env; attempting CloudFormation discovery…")
+        discovered = discover_bucket_from_stack(region)
+        if discovered:
+            bucket = discovered
+    bucket = st.text_input("S3 Bucket", value=bucket or "")
+    region = st.text_input("AWS Region", value=region or "")
+    if st.button("Save settings"):
+        persist_settings(bucket.strip() or None, region.strip() or None)
+        st.success("Saved. Restart not required.")
 
-    bucket_holder = st.empty()
-    col_a, col_b = st.columns([1, 1])
-    with col_a:
-        st.button("Auto-detect bucket", on_click=autodetect_stack, args=(bucket_holder,))
-    with col_b:
-        if st.session_state.get("bucket_name"):
-            bucket_holder.info(f"Using s3://{st.session_state['bucket_name']}")
-        else:
-            bucket_holder.info("No bucket detected yet.")
+st.title("Automatic Highlight Reel – Local UI")
 
-    st.text_input("Bucket name (fallback/manual)", key="bucket_name")
+max_size_bytes, _ = limits_bytes()
 
-    st.divider()
-    st.header("Prompt")
-    mode = st.radio("How should the prompt be set?", ["Use pipeline default", "Attach custom prompt"], index=0)
-    custom_prompt = None
-    if mode == "Attach custom prompt":
-        presets = {
-            "Basketball jump shot": "<image> is there a player jumping and shooting a basketball?",
-            "Swimming dive": "<image> is there a person in the air jumping into the water?",
-            "Soccer goal attempt": "<image> is a player taking a shot on goal?",
-        }
-        preset = st.selectbox("Preset", list(presets.keys()), index=0)
-        custom_prompt = st.text_area("Custom prompt (stored as S3 object metadata 'prompt')", presets[preset], height=100)
-        st.caption("Your Lambda reads this metadata and passes it downstream to ECS.")
+uploaded = st.file_uploader(
+    "Select a video", type=["mp4", "mov", "mkv", "avi"], accept_multiple_files=False
+)
 
-# --------------------
-# Main — Direct-to-S3 Only
-# --------------------
-region = st.session_state.get("aws_region")
-bucket = st.session_state.get("bucket_name")
+prompt = st.text_area(
+    "Custom prompt (optional)", value=DEFAULT_PROMPT, max_chars=PROMPT_MAX_CHARS, height=80
+)
 
-st.subheader("1) Direct upload to S3 (pre‑signed POST)")
-st.caption("Uploads directly from your browser to S3. This avoids Streamlit server timeouts and RAM spikes.")
+if uploaded is not None:
+    st.info(f"Selected: {uploaded.name} ({_human_size(uploaded.size)})")
 
-filename_hint = st.text_input("S3 object name (e.g., practice.mp4) — will be stored under videos/<name>", value="practice.mp4")
-input_key = f"videos/{filename_hint}"
-result_key = f"results/{Path(filename_hint).stem}_highlights.mp4"
+col1, col2 = st.columns(2)
+start = col1.button("Start upload & process", type="primary", disabled=uploaded is None)
+reset = col2.button("Reset")
 
-uploader_area = st.empty()
-ready = False
+if reset:
+    st.session_state.clear()
+    st.rerun()
 
-if not (region and bucket and filename_hint):
-    st.info("Fill in Region, Bucket, and S3 object name above.")
-else:
-    try:
-        s3_client = boto3.client("s3", region_name=region)
-        conditions = [
-            {"bucket": bucket},
-            ["starts-with", "$key", "videos/"],
-            ["content-length-range", 1, 20 * 1024 * 1024 * 1024],
-        ]
-        fields = {}
-        if custom_prompt:
-            fields["x-amz-meta-prompt"] = custom_prompt
-            #conditions.append(["starts-with", "$x-amz-meta-prompt", ""])
-        presigned = s3_client.generate_presigned_post(
-            Bucket=bucket,
-            Key=input_key,
-            Fields=fields,
-            Conditions=conditions,
-            ExpiresIn=3600,
+status = st.empty()
+progress = st.progress(0.0, text="Idle")
+debug_box = st.empty()
+
+if start and uploaded is not None:
+    # Validate settings
+    if not bucket:
+        st.error("Bucket is required. Set it in Settings.")
+        st.stop()
+    # size guard
+    if uploaded.size > TARGET_MAX_SIZE_GB * 1024 * 1024 * 1024:
+        st.error(f"File exceeds {TARGET_MAX_SIZE_GB} GB limit.")
+        st.stop()
+
+    # Write to a temp path on disk
+    tmpdir = tempfile.mkdtemp(prefix="hl_upload_")
+    temp_path = os.path.join(tmpdir, uploaded.name)
+
+    if not check_free_space(temp_path, uploaded.size * 2):  # buffer + temp
+        st.error("Insufficient disk space for staging upload.")
+        st.stop()
+
+    status.info("Saving file to disk…")
+    uploaded.seek(0)
+    size_written = save_uploaded_to_disk(uploaded, temp_path)
+
+    if size_written != uploaded.size:
+        st.warning("Size mismatch after save; proceeding but results may vary.")
+
+    # Begin multipart upload in a worker thread; update UI from the main thread.
+    s3 = get_s3_client(region or None)
+
+    q: Queue = Queue()
+    result = {"key": None, "error": None}
+
+    def on_progress(ps):
+        # Called from s3transfer threads. Do NOT touch Streamlit here.
+        # Instead, queue the latest progress state for the main thread to render.
+        try:
+            q.put(ps, block=False)
+        except Exception:
+            pass
+
+    def worker():
+        try:
+            k = multipart_upload(
+                s3,
+                bucket=bucket,
+                src_path=temp_path,
+                prompt=prompt.strip() or None,
+                on_progress=on_progress,
+                dry_run=dry_run,
+            )
+            result["key"] = k
+        except Exception:
+            result["error"] = traceback.format_exc()
+
+    status.info("Uploading to S3…")
+    t = Thread(target=worker, daemon=True)
+    t.start()
+
+    last_update = time.time()
+    while t.is_alive():
+        try:
+            ps = q.get(timeout=0.2)
+            pct = ps.pct / 100.0
+            eta = f"ETA {timedelta(seconds=int(ps.eta))}" if ps.eta else "Estimating…"
+            progress.progress(pct, text=f"Uploading {ps.filename}: {ps.pct:.1f}% • {eta}")
+            # light debug heartbeat each ~3s
+            if time.time() - last_update > 3:
+                debug_box.caption("Uploading… (UI updated from main thread)")
+                last_update = time.time()
+        except Empty:
+            # keep UI responsive
+            pass
+        except Exception as e:
+            debug_box.error(f"Progress update error: {e}")
+            break
+        # Yield to Streamlit
+        time.sleep(0.05)
+
+    t.join(timeout=1)
+    if result["error"]:
+        status.error("Upload failed.")
+        with st.expander("Show error details"):
+            st.code(result["error"], language="text")
+        st.stop()
+    key = result["key"]
+    progress.progress(1.0, text="Upload complete.")
+
+    # Polling phase
+    status.info("Processing in backend… This can take several minutes.")
+    log_box = st.empty()
+
+    pr = poll_for_result(s3, bucket=bucket, input_key=key)
+    log_line = latest_log_line(region or None, [
+        f"/aws/lambda/-{ 'HighlightProcessorStack' }-VideoTriggerLambda",
+        f"/ecs/video-processor-{ 'HighlightProcessorStack' }",  # best-effort
+    ])
+    if log_line:
+        log_box.caption(f"Last log: {log_line.strip()}")
+
+    if pr.found:
+        status.success("Highlights ready!")
+        # show player and download link
+        s3_path = f"s3://{bucket}/{pr.key}"
+        st.write(s3_path)
+        try:
+            # Try to stream the file for preview
+            obj = s3.get_object(Bucket=bucket, Key=pr.key)
+            data = obj["Body"].read()
+            st.video(data)
+            st.download_button("Download highlights", data=data, file_name=os.path.basename(pr.key))
+        except Exception:
+            st.info("Preview not available. Use the S3 path above.")
+    else:
+        status.error(
+            "Timed out waiting for result. Verify permissions, bucket name, and check CloudWatch logs."
         )
-        html = (
-            "<div style=\"font-family:system-ui,sans-serif;\">"
-            f"<div style='margin-bottom:6px;'>Max per-file (Streamlit display): {CURRENT_MAX_MB}MB. Direct-to-S3 bypasses it.</div>"
-            "<input id=\"file\" type=\"file\" accept=\"video/*\" />"
-            "<button id=\"btn\">Upload to S3</button>"
-            "<div id=\"status\" style=\"margin-top:8px;\">Idle</div>"
-            "<progress id=\"pg\" value=\"0\" max=\"100\" style=\"width:100%; height:16px;\"></progress>"
-            "<script>"
-            f"const url = {json.dumps(presigned['url'])};"
-            f"const fields = {json.dumps(presigned['fields'])};"
-            "const btn = document.getElementById('btn');"
-            "const status = document.getElementById('status');"
-            "const pg = document.getElementById('pg');"
-            "btn.onclick = () => {"
-            "  const f = document.getElementById('file').files[0];"
-            "  if (!f) { alert('Choose a file first.'); return; }"
-            "  const fd = new FormData();"
-            "  for (const [k,v] of Object.entries(fields)) { fd.append(k, v); }"
-            "  fd.append('file', f);"
-            "  const xhr = new XMLHttpRequest();"
-            "  xhr.upload.addEventListener('progress', (e) => {"
-            "    if (e.lengthComputable) {"
-            "      const pct = Math.round((e.loaded/e.total)*100);"
-            "      pg.value = pct;"
-            "      status.innerText = `Uploading… ${pct}%`;"
-            "    }"
-            "  });"
-            "  xhr.onreadystatechange = () => {"
-            "    if (xhr.readyState === 4) {"
-            "      status.innerText = xhr.status === 204 ? 'Upload complete! Click \"Start\" below to watch processing.' : `Upload failed: ${xhr.status} ${xhr.responseText}`;"
-            "    }"
-            "  };"
-            "  xhr.open('POST', url, true);"
-            "  xhr.send(fd);"
-            "};"
-            "</script>"
-            "</div>"
-        )
-        st.components.v1.html(html, height=220)
-        ready = True
-    except Exception as e:
-        st.error(f"Could not create pre-signed POST: {e}")
-
-proceed = st.checkbox("I've completed the S3 upload and want to start watching for results.", value=False, disabled=not ready)
-start_btn = st.button("Start processing / watch logs", type="primary", disabled=not (ready and proceed and bucket))
-
-st.divider()
-st.subheader("2) Progress & logs")
-status_area = st.empty()
-log_expander = st.expander("Lambda logs (live) — optional", expanded=False)
-video_area = st.empty()
-
-if start_btn:
-    try:
-        logs = boto3.client("logs", region_name=region)
-        s3 = boto3.client("s3", region_name=region)
-        start_ms = int(time.time() * 1000)
-        log_group = f"/aws/lambda/{st.session_state['stack_name']}-VideoTriggerLambda"
-        last_lines = 0
-        waiting = st.status("Processing on AWS… (this may take a while)", expanded=True)
-        deadline = time.time() + 3600
-        poll = 6
-        while True:
-            if time.time() > deadline:
-                raise TimeoutError("Processing timed out (demo limit)")
-            try:
-                resp = logs.filter_log_events(logGroupName=log_group, startTime=start_ms, interleaved=True, limit=200)
-                lines = []
-                for e in resp.get("events", []):
-                    ts = datetime.fromtimestamp(e["timestamp"]/1000, tz=timezone.utc).strftime("%H:%M:%S")
-                    lines.append(f"[{ts}] {e.get('message','').rstrip()}")
-                if lines:
-                    with log_expander:
-                        for ln in lines[last_lines:]:
-                            st.text(ln)
-                        last_lines = len(lines)
-            except Exception:
-                pass
-            try:
-                s3.head_object(Bucket=bucket, Key=result_key)
-                waiting.update(label="Processing complete! Downloading result…", state="complete")
-                break
-            except ClientError:
-                time.sleep(poll)
-                poll = min(poll + 2, 15)
-        obj = s3.get_object(Bucket=bucket, Key=result_key)
-        out_bytes = obj["Body"].read()
-        st.subheader("3) Highlight reel")
-        video_area.video(out_bytes)
-        st.download_button("Download highlight reel", out_bytes, file_name=f"{Path(filename_hint).stem}_highlights.mp4", mime="video/mp4")
-        with st.expander("S3 object info"):
-            st.write({"input": f"s3://{bucket}/{input_key}", "output": f"s3://{bucket}/{result_key}", "region": region})
-    except (NoCredentialsError, BotoCoreError, ClientError) as e:
-        status_area.error(f"AWS error: {e}")
-    except TimeoutError as e:
-        status_area.error(str(e))
-    except Exception as e:
-        status_area.error(f"Unexpected error: {e}")
-
-st.markdown("---")
-st.caption("Tip: For long practice videos, prefer the Direct-to-S3 path above to avoid Streamlit timeouts.")

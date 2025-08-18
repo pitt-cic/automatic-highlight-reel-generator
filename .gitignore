@@ -77,4 +77,5 @@ model-testing/.cache/**
 model-testing/test_frames/**
 model-testing/test_frames.tar.gz
 
-# Keep empty dirs with .gitkeep if needed
+# Copilot context
+/prompts/ 
