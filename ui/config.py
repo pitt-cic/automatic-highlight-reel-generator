@@ -20,11 +20,11 @@ RESULT_PREFIX = os.getenv("RESULT_PREFIX", "results/")
 RESULT_NAMING = os.getenv("RESULT_NAMING", "{basename}_highlights.mp4")
 CUSTOM_PROMPT_KEY = os.getenv("CUSTOM_PROMPT_KEY", "prompt")
 DEFAULT_PROMPT = os.getenv(
-    "DEFAULT_PROMPT", "is a player attempting a shot? ignore passes, dribbles."
+    "DEFAULT_PROMPT", "<image> Is there a person in the air jumping into the water? Answer with 'yes' or 'no'.\n"
 )
 AWS_REGION_SOURCE = "env or boto3 Session().region_name"
 
-TARGET_MAX_SIZE_GB = int(os.getenv("TARGET_MAX_SIZE_GB", "2"))
+TARGET_MAX_SIZE_GB = int(os.getenv("TARGET_MAX_SIZE_GB", "10"))
 PROMPT_MAX_CHARS = int(os.getenv("PROMPT_MAX_CHARS", "1000"))
 POLL_SECONDS = int(os.getenv("POLL_SECONDS", "5"))
 BACKOFF_FACTOR = float(os.getenv("BACKOFF_FACTOR", "1.5"))
@@ -32,7 +32,7 @@ MAX_WAIT_MIN = int(os.getenv("MAX_WAIT_MIN", "45"))
 MULTIPART_THRESHOLD_MB = int(os.getenv("MULTIPART_THRESHOLD_MB", "64"))
 PART_SIZE_MB = int(os.getenv("PART_SIZE_MB", "64"))
 MAX_CONCURRENCY = int(os.getenv("MAX_CONCURRENCY", "8"))
-UPLOAD_LIMIT_MB = int(os.getenv("UPLOAD_LIMIT_MB", "2048"))
+UPLOAD_LIMIT_MB = int(os.getenv("UPLOAD_LIMIT_MB", "10240"))
 
 
 @dataclass

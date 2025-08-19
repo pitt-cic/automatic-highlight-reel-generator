@@ -31,9 +31,10 @@ class ProgressState:
     bytes_transferred: int = 0
     part_size: int = 5 * 1024 * 1024
     start_time: float = time.time()
-
     def update(self, n: int) -> None:
-        self.bytes_transferred = n
+        # boto3 Transfer callbacks receive incremental byte counts,
+        # so accumulate for correct overall progress. Dry-run simulates similarly.
+        self.bytes_transferred += n
 
     @property
     def pct(self) -> float:
@@ -90,7 +91,7 @@ def save_uploaded_to_disk(uploaded_file, dst_path: str) -> int:
    with open(dst_path, "wb") as out:
        for chunk in iter(lambda: uploaded_file.read(1024 * 1024), b""):
            out.write(chunk)
-           size = len(chunk)
+           size += len(chunk)
    return size
 
 
@@ -111,6 +112,30 @@ def _make_transfer_config(part_size: int, threshold: int, max_conc: int) -> Tran
 def s3_key_for_upload(filename: str) -> str:
    base = os.path.basename(filename)
    return f"{INPUT_PREFIX}{base}"
+
+
+def copy_s3_object_to_input(
+   s3,
+   dest_bucket: str,
+   source_bucket: str,
+   source_key: str,
+   prompt: Optional[str],
+) -> str:
+   """Server-side copy of an existing S3 object into INPUT_PREFIX, attaching prompt metadata.
+   Returns the destination key.
+   """
+   base = os.path.basename(source_key)
+   dest_key = f"{INPUT_PREFIX}{base}"
+   extra = {"MetadataDirective": "REPLACE", "Metadata": {}}
+   if prompt:
+       extra["Metadata"][CUSTOM_PROMPT_KEY] = prompt
+   s3.copy(
+       {"Bucket": source_bucket, "Key": source_key},
+       dest_bucket,
+       dest_key,
+       ExtraArgs=extra,
+   )
+   return dest_key
 
 
 def multipart_upload(
