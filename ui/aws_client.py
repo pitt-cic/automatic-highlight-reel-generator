@@ -26,14 +26,14 @@ def get_s3_client(region: Optional[str] = None):
     return session.client("s3", config=cfg)
 
 
-def discover_bucket_from_stack(region: Optional[str]) -> Optional[str]:
+def discover_bucket_from_stack(region: Optional[str], stack_name: Optional[str] = None) -> Optional[str]:
     """Try to discover bucket name from CloudFormation stack outputs.
     Returns bucket or None if not resolvable.
     """
     try:
         session = get_boto3_session(region)
         cfn = session.client("cloudformation")
-        resp = cfn.describe_stacks(StackName=STACK_NAME)
+        resp = cfn.describe_stacks(StackName=stack_name or STACK_NAME)
         for stack in resp.get("Stacks", []):
             for out in stack.get("Outputs", []):
                 # Heuristic: look for key containing 'BucketName' or similar

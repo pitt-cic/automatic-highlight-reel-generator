@@ -39,6 +39,7 @@ UPLOAD_LIMIT_MB = int(os.getenv("UPLOAD_LIMIT_MB", "10240"))
 class Settings:
     bucket_name: Optional[str]
     region: Optional[str]
+    stack_name: str
     dry_run: bool = False
 
 
@@ -66,18 +67,21 @@ def get_initial_settings() -> Settings:
     if not region_env:
         region_env = boto3.Session().region_name
     dry_run_val = os.getenv("DRY_RUN") or local_env.get("DRY_RUN") or "false"
+    stack = os.getenv("STACK_NAME") or local_env.get("STACK_NAME") or STACK_NAME
     dry_run = str(dry_run_val).lower() in {"1", "true", "yes", "y"}
-    return Settings(bucket_name=bucket_env, region=region_env, dry_run=dry_run)
+    return Settings(bucket_name=bucket_env, region=region_env, stack_name=stack, dry_run=dry_run)
 
 
-def persist_settings(bucket: Optional[str], region: Optional[str]) -> None:
-    """Persist BUCKET_NAME and AWS_REGION to ui/.env for later runs."""
+def persist_settings(bucket: Optional[str], region: Optional[str], stack_name: Optional[str]) -> None:
+    """Persist BUCKET_NAME, AWS_REGION, and STACK_NAME to ui/.env for later runs."""
     path = _env_path()
     lines = []
     if bucket:
         lines.append(f"BUCKET_NAME={bucket}\n")
     if region:
         lines.append(f"AWS_REGION={region}\n")
+    if stack_name:
+        lines.append(f"STACK_NAME={stack_name}\n")
     # Preserve DRY_RUN if present
     current = load_local_env()
     if "DRY_RUN" in current:

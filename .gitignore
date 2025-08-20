@@ -65,6 +65,7 @@ ENV/
 # UI
 ui/venv/
 ui/__pycache__/
+ui/.chache/
 ui/uploads/**
 ui/static/samples/**
 
