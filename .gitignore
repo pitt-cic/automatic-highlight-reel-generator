@@ -63,11 +63,10 @@ ENV/
 # ----------------------------
 # Project-specific ignores
 # UI
-ui/venv/
-ui/__pycache__/
-ui/.chache/
-ui/uploads/**
-ui/static/samples/**
+frontend/ui/__pycache__/
+frontend/ui/.cache/
+frontend/ui/uploads/**
+frontend/ui/static/samples/**
 
 # Model testing
 model-testing/.venv/

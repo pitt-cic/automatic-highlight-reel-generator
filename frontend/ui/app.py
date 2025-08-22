@@ -300,6 +300,14 @@ if start and ((uploaded is not None) or (use_s3_uri and s3_uri_input)):
                 time.sleep(2)
 
         if found:
+            # Force-finish UI since the result object exists even if logs didn't include the final message
+            try:
+                st_status.finished_success = True  # type: ignore[name-defined]
+                st_status = _normalize_status(st_status)  # type: ignore[name-defined]
+                _render_stages(st_status)  # type: ignore[name-defined]
+            except Exception:
+                pass
+            progress.progress(1.0, text="Processing… 100%")
             status.success("Highlights ready!")
             s3_path = f"s3://{bucket}/{result_key}"
             st.write(s3_path)
@@ -471,6 +479,14 @@ if start and ((uploaded is not None) or (use_s3_uri and s3_uri_input)):
             time.sleep(2)
 
     if found:
+        # Force-finish UI since the result object exists even if logs didn't include the final message
+        try:
+            st_status.finished_success = True  # type: ignore[name-defined]
+            st_status = _normalize_status(st_status)  # type: ignore[name-defined]
+            _render_stages(st_status)  # type: ignore[name-defined]
+        except Exception:
+            pass
+        progress.progress(1.0, text="Processing… 100%")
         status.success("Highlights ready!")
         s3_path = f"s3://{bucket}/{result_key}"
         st.write(s3_path)
