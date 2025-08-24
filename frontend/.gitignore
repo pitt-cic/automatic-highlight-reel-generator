@@ -1,0 +1,6 @@
+.venv
+ui/.env
+ui/__pycache__/
+ui/.cache/
+
+bash-context.txt
